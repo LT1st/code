@@ -1,0 +1,3 @@
+/home/steven/code/tst/HSV参数调整/build/CMakeFiles/rebuild_cache.dir
+/home/steven/code/tst/HSV参数调整/build/CMakeFiles/Test.dir
+/home/steven/code/tst/HSV参数调整/build/CMakeFiles/edit_cache.dir

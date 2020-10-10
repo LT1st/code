@@ -1,0 +1,118 @@
+// extractIndices.cpp : 定义控制台应用程序的入口点。
+//
+ 
+#include "stdafx.h"
+ 
+ 
+//int _tmain(int argc, _TCHAR* argv[])
+//{
+//	return 0;
+//}
+ 
+#include <iostream>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/io/ply_io.h>
+#include <pcl/point_types.h>
+#include <pcl/sample_consensus/method_types.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/extract_indices.h>
+using namespace std;
+ 
+int
+main(int argc, char** argv)
+{
+	pcl::PCLPointCloud2::Ptr cloud_blob(new pcl::PCLPointCloud2), cloud_filtered_blob(new pcl::PCLPointCloud2);
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZ>), cloud(new pcl::PointCloud<pcl::PointXYZ>),cloud_p(new pcl::PointCloud<pcl::PointXYZ>), cloud_f(new pcl::PointCloud<pcl::PointXYZ>);
+ 
+	// Fill in the cloud data 读入数据
+	pcl::PCDReader reader;
+	reader.read("table_scene_lms400.pcd", *cloud_blob);//二进制点云数据
+ 
+	std::cerr << "PointCloud before filtering: " << cloud_blob->width * cloud_blob->height << " data points." << std::endl;
+ 
+	// Create the filtering object: downsample the dataset using a leaf size of 1cm phase one 使用1cm的体素栅格（VoxelGrip），进行下采样滤波
+	pcl::VoxelGrid<pcl::PCLPointCloud2> sor;
+	sor.setInputCloud(cloud_blob);
+	sor.setLeafSize(0.01f, 0.01f, 0.01f);
+	sor.filter(*cloud_filtered_blob);
+ 
+	// Convert to the templated PointCloud
+	pcl::fromPCLPointCloud2(*cloud_filtered_blob, *cloud_filtered);//二进制点云数据转化为标准点云数据 
+	pcl::fromPCLPointCloud2(*cloud_blob, *cloud);
+ 
+	std::cerr << "PointCloud after (VoxelGridDownsampling filtering: " << cloud_filtered->width * cloud_filtered->height << " data points." << std::endl;
+ 
+	// Write the downsampled version to disk
+	pcl::PCDWriter writer;
+	writer.write<pcl::PointXYZ>("table_scene_lms400_downsampled.pcd", *cloud_filtered, false);
+	pcl::PLYWriter writer1;
+	writer1.write("VoxelGridDownsampling1cm_table.ply", *cloud_filtered);
+	writer1.write("origin_table.ply", *cloud);
+ 
+	pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients());//创建参数模型的的参数对象
+	pcl::PointIndices::Ptr inliers(new pcl::PointIndices());//储存模型内点的下标索引的数组指针
+	// Create the segmentation object
+	pcl::SACSegmentation<pcl::PointXYZ> seg;//创建SAC分割 对象
+	// Optional 可选的设置项
+	seg.setOptimizeCoefficients(true);//优化参数设置 作用？？？？
+	// Mandatory  强制设置选项
+	seg.setModelType(pcl::SACMODEL_PLANE);//SAC几何模型设置选择plane平面模型
+	seg.setMethodType(pcl::SAC_RANSAC);//SAC方法选择，选择随机一致性采样方法
+	seg.setMaxIterations(1000);//最大迭代次数
+	seg.setDistanceThreshold(0.01);//设置距离阈值
+ 
+	// Create the filtering object
+	pcl::ExtractIndices<pcl::PointXYZ> extract;//创建提取索引方法的对象
+	//phase two 
+	int i = 0, nr_points = (int)cloud_filtered->points.size();
+	cout << "nr_points  " << nr_points << endl;
+	// While 30% of the original cloud is still there  下面过程执行的条件是经过体素栅格下采样之后必须仍有超过30%的点数据存在
+	while (cloud_filtered->points.size() > 0.3 * nr_points)
+	{
+		
+		// Segment the largest planar component from the remaining cloud  在剩余的点云中分割最大平面组件(不断循环）
+		seg.setInputCloud(cloud_filtered);
+		seg.segment(*inliers, *coefficients);//传入的参数未进行赋值  利用参数模型进行分割
+		if (inliers->indices.size() == 0)
+		{
+			std::cerr << "Could not estimate a planar model for the given dataset." << std::endl;
+			break;
+		}
+ 
+		// Extract the inliers
+		extract.setInputCloud(cloud_filtered);
+		extract.setIndices(inliers);
+		extract.setNegative(false);
+		extract.filter(*cloud_p);//在下采样基础之上进行分割和ExtractInliers滤波的  结果就是一个平面模型映射的结果
+		std::cerr << "PointCloud representing the planar component: " << cloud_p->width * cloud_p->height << " data points." << std::endl;
+ 
+		std::stringstream ss;
+		ss << "table_scene_lms400_plane_Extract_" << i << ".ply";
+		writer1.write<pcl::PointXYZ>(ss.str(), *cloud_p, false);
+		//ss.clear();
+ 
+ 
+		// Create the filtering object
+		extract.setNegative(true);
+		extract.filter(*cloud_f);//这里提取的是不符合条件的点
+		//std::stringstream ss1; 
+		//ss1<< "table_scene_lms400_plane_Extract_Neg_" << i << ".ply";
+		//writer1.write<pcl::PointXYZ>(ss1.str(), *cloud_f, false);
+		ss.clear();
+		cloud_filtered.swap(cloud_f);//在体素栅格下采样基础之上得到的点云数据和提取出的不符合条件的点云数据进行调换，进入下一轮循环
+		//std::stringstream ss2; 
+		//ss2 << "table_scene_lms400_plane_down_swap_Extract_Neg_" << i << ".ply";
+		//writer1.write<pcl::PointXYZ>(ss2.str(), *cloud_filtered, false);
+		ss.clear();
+		i++;
+		cout << "cloud_filtered->points.size" << cloud_filtered->points.size() << endl;
+	}
+ 
+ 
+	return (0);
+}
+ 
+ 
